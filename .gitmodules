@@ -1,0 +1,3 @@
+[submodule "libs/menori"]
+	path = libs/menori
+	url = https://github.com/rozenmad/Menori.git

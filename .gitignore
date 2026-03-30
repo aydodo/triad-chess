@@ -1,0 +1,17 @@
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Love2D build artifacts
+*.love
+
+# Logs / debug
+*.log
+
+# Editor
+.vscode/
+.idea/
+
+# Local Claude settings (not team-shared)
+.claude/settings.local.json
