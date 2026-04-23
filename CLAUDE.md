@@ -15,7 +15,7 @@ Phase 1 = 2D local prototype. Phase 2 = 3D via Menori (`libs/menori/`).
 |---|---|
 | Language | Lua 5.1 (Love2D runtime) |
 | Framework | Love2D 11.4 |
-| 3D (Phase 2) | [Menori](https://github.com/rozenmad/Menori) — place as `libs/menori/` |
+| 3D (Phase 2) | [Menori](https://github.com/rozenmad/Menori) — cloned as git submodule at `libs/menori/` |
 | Entry point | `main.lua` + `conf.lua` |
 
 **Run the game:**
@@ -25,6 +25,11 @@ love .
 love /path/to/triad_chess
 ```
 
+**Clone with submodule (Menori included):**
+```bash
+git clone --recurse-submodules https://github.com/aydodo/triad-chess
+```
+
 ---
 
 ## Architecture
@@ -32,6 +37,8 @@ love /path/to/triad_chess
 ```
 main.lua            ← love.load / love.update / love.draw / input callbacks
 conf.lua            ← window config (1400×760, resizable)
+libs/
+  menori/           ← Menori git submodule (3D scene graph for Phase 2)
 src/
   constants.lua     ← ALL magic numbers & enums (edit here first)
   utils.lua         ← pure helpers (col↔letter, clamp, opponent…)
@@ -43,17 +50,118 @@ src/
     movement.lua    ← move_targets(), shoot_targets(), threat_cells()
     validation.lua  ← validate every action type; returns (ok, err)
   ui/
-    board_view.lua  ← renders one board; handles cell ↔ screen coords
+    board_view.lua  ← (Phase 1) renders one board in 2D; cell ↔ screen coords
     hud.lua         ← timer, momentum bars, reserves, kings, game-over
     game_view.lua   ← orchestrates 3 BoardViews + HUD + mouse input
+    scene_3d.lua    ← (Phase 2) Menori 3D scene; replaces board_view.lua
 ```
 
-**Data flow:**
+**Data flow (Phase 1 — 2D):**
 ```
 love.mousepressed → GameView → GameEngine:execute_*() → GameState mutation
 love.update       → GameEngine:update(dt)              → turn timer / auto-end
 love.draw         → GameView:draw() → BoardView:draw() + HUD:draw()
 ```
+
+**Data flow (Phase 2 — 3D, target):**
+```
+love.mousepressed → GameView → ray-cast → GameEngine:execute_*() → GameState mutation
+love.update       → GameEngine:update(dt) + Scene3D:update(dt)
+love.draw         → Scene3D:draw() [Menori canvas] → HUD:draw() [2D overlay]
+```
+
+---
+
+## Menori integration (Phase 2)
+
+### How to load Menori
+```lua
+-- Always require from the project root path
+local menori = require("libs.menori.menori")
+```
+
+### Key Menori classes
+
+| Class | Purpose |
+|---|---|
+| `menori.PerspectiveCamera` | 3D perspective camera with `m_view` / `m_projection` matrices |
+| `menori.Environment` | Scene-level uniforms: camera matrices, lights, fog |
+| `menori.Scene` | Renders/updates a node tree via `render_nodes()` / `update_nodes()` |
+| `menori.Node` | Scene-graph node; has `children`, `position`, `rotation`, `scale` |
+| `menori.ModelNode` | Renderable node (mesh + material) |
+| `menori.glTFLoader` | Loads `.gltf` / `.glb` files into a node tree |
+| `menori.Box` | Procedural box mesh |
+| `menori.Plane` | Procedural plane mesh |
+| `menori.Sphere` | Procedural sphere mesh |
+| `menori.ml` | Math library: `ml.vec3`, `ml.mat4`, `ml.quat` |
+
+### Minimal 3D scene pattern
+```lua
+local menori = require("libs.menori.menori")
+
+-- Camera: positioned above-behind, looking at board centre
+local camera = menori.PerspectiveCamera(60, sw/sh, 0.1, 1000)
+camera:set_position(0, 12, 10)
+camera:look_at(menori.ml.vec3(0, 0, 0))
+
+-- Environment (handles uniforms sent to shaders per frame)
+local env = menori.Environment(camera)
+
+-- Scene (renders node tree)
+local scene = menori.Scene()
+
+-- Root node
+local root = menori.Node()
+
+-- Board tile: a Plane mesh at world position
+local tile = menori.ModelNode(menori.Plane(1, 1))
+tile:set_position(x, 0, z)
+root:attach(tile)
+
+-- Render loop
+function love.draw()
+    love.graphics.setCanvas({canvas, depth = true})
+    scene:render_nodes(root, env)
+    love.graphics.setCanvas()
+    -- blit canvas to screen …
+end
+```
+
+### Phase 2 board → 3D mapping
+
+| Game concept | 3D representation |
+|---|---|
+| Board cell (col, row) | `Plane(1,1)` at `vec3((col-3)*1.1, 0, (row-4)*1.1)` |
+| Piece | `Box(0.7, 1.0, 0.7)` placeholder → swap for `.glb` model later |
+| Selection highlight | Emissive colour uniform on the tile's material |
+| 3 boards | Offset each board along the X axis: `board_idx * 8` units |
+| Camera per player | 3 `PerspectiveCamera` instances; swap on focus change |
+| Mouse picking | Ray–AABB intersection against piece bounding boxes (`menori.ml`) |
+
+### GLTF piece loading (when models are ready)
+```lua
+-- Assets go in assets/models/<piece_type>.glb
+local loader = menori.glTFLoader.load("assets/models/king.glb")
+local node_tree = menori.NodeTreeBuilder.create(loader, scene, env)
+root:attach(node_tree)
+```
+
+### Render target (Phase 2 main.lua pattern)
+```lua
+local canvas = love.graphics.newCanvas(sw, sh, {format="rgba8", depth=true})
+
+function love.draw()
+    love.graphics.setCanvas({canvas, depth=true})
+    love.graphics.clear(0.08, 0.08, 0.10)
+    scene_3d:draw()                  -- Menori scene
+    love.graphics.setCanvas()
+    love.graphics.draw(canvas, 0, 0) -- blit
+    hud:draw(engine.state)           -- 2D HUD overlay
+end
+```
+
+> **Rule:** `src/ui/scene_3d.lua` reads `GameState` and builds/updates the Menori node tree.
+> It must **never** call `GameEngine` methods — UI is read-only.
 
 ---
 
