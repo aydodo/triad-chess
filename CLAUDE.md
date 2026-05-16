@@ -1,312 +1,314 @@
-# Triad Chess — Conductor Instructions
+# CLAUDE.md — Triad Chess
 
-## Project overview
-
-**Triad Chess** is a tactical 3v3 chess/MOBA hybrid built in **Love2D 11.4 (Lua)**.
-Phase 1 = 2D local prototype. Phase 2 = 3D via Menori (`libs/menori/`).
-
-> USP: First team chess game where individual decisions affect teammates via a **shared invocation system**.
+> Context file for Claude Code / Claude chat sessions working on this project.
+> **Before doing anything, read `triad_chess_rules_v2.md` as the single source of truth for game mechanics.** This file tells you *how to work*, not *what the rules are*.
 
 ---
 
-## Tech stack
+## 1. Project identity
 
-| Layer | Tool |
-|---|---|
-| Language | Lua 5.1 (Love2D runtime) |
-| Framework | Love2D 11.4 |
-| 3D (Phase 2) | [Menori](https://github.com/rozenmad/Menori) — cloned as git submodule at `libs/menori/` |
-| Entry point | `main.lua` + `conf.lua` |
+**Triad Chess** is a 3v3 tactical game fusing mechanics from Bughouse Chess (shared reserve + summoning), Hnefatafl (asymmetric territorial structure), and MOBAs (draft, ultimates, momentum). Positioned as more accessible than LoL, deeper than classical chess, in a Rocket League-style competitive format (short matches, high ceiling).
 
-**Run the game:**
-```bash
-love .
-# or
-love /path/to/triad_chess
-```
+**Target audience.** Competitive / esport. Match length: **10–15 min** standard, **20 min** hard cap.
 
-**Clone with submodule (Menori included):**
-```bash
-git clone --recurse-submodules https://github.com/aydodo/triad-chess
-```
+**North star.** Every mechanic must serve at least one of:
+1. Create interesting decisions.
+2. Reward team coordination.
+3. Maintain dynamic pacing.
+
+If a feature fails all three, it does not ship.
 
 ---
 
-## Architecture
+## 2. Current phase
 
-```
-main.lua            ← love.load / love.update / love.draw / input callbacks
-conf.lua            ← window config (1400×760, resizable)
-libs/
-  menori/           ← Menori git submodule (3D scene graph for Phase 2)
-src/
-  constants.lua     ← ALL magic numbers & enums (edit here first)
-  utils.lua         ← pure helpers (col↔letter, clamp, opponent…)
-  piece.lua         ← Piece class; all 8 types; per-piece flags
-  board.lua         ← Board (5×7 grid + totem system)
-  game_state.lua    ← Global state: 3 boards, reserves, momentum, turns
-  game_engine.lua   ← Action execution (move/shoot/invoke/ultimate…)
-  logic/
-    movement.lua    ← move_targets(), shoot_targets(), threat_cells()
-    validation.lua  ← validate every action type; returns (ok, err)
-  ui/
-    board_view.lua  ← (Phase 1) renders one board in 2D; cell ↔ screen coords
-    hud.lua         ← timer, momentum bars, reserves, kings, game-over
-    game_view.lua   ← orchestrates 3 BoardViews + HUD + mouse input
-    scene_3d.lua    ← (Phase 2) Menori 3D scene; replaces board_view.lua
-```
+We are **pre-Phase 1**: ruleset is stabilized (v2.0), prototype not yet started.
 
-**Data flow (Phase 1 — 2D):**
-```
-love.mousepressed → GameView → GameEngine:execute_*() → GameState mutation
-love.update       → GameEngine:update(dt)              → turn timer / auto-end
-love.draw         → GameView:draw() → BoardView:draw() + HUD:draw()
-```
-
-**Data flow (Phase 2 — 3D, target):**
-```
-love.mousepressed → GameView → ray-cast → GameEngine:execute_*() → GameState mutation
-love.update       → GameEngine:update(dt) + Scene3D:update(dt)
-love.draw         → Scene3D:draw() [Menori canvas] → HUD:draw() [2D overlay]
-```
-
----
-
-## Menori integration (Phase 2)
-
-### How to load Menori
-```lua
--- Always require from the project root path
-local menori = require("libs.menori.menori")
-```
-
-### Key Menori classes
-
-| Class | Purpose |
-|---|---|
-| `menori.PerspectiveCamera` | 3D perspective camera with `m_view` / `m_projection` matrices |
-| `menori.Environment` | Scene-level uniforms: camera matrices, lights, fog |
-| `menori.Scene` | Renders/updates a node tree via `render_nodes()` / `update_nodes()` |
-| `menori.Node` | Scene-graph node; has `children`, `position`, `rotation`, `scale` |
-| `menori.ModelNode` | Renderable node (mesh + material) |
-| `menori.glTFLoader` | Loads `.gltf` / `.glb` files into a node tree |
-| `menori.Box` | Procedural box mesh |
-| `menori.Plane` | Procedural plane mesh |
-| `menori.Sphere` | Procedural sphere mesh |
-| `menori.ml` | Math library: `ml.vec3`, `ml.mat4`, `ml.quat` |
-
-### Minimal 3D scene pattern
-```lua
-local menori = require("libs.menori.menori")
-
--- Camera: positioned above-behind, looking at board centre
-local camera = menori.PerspectiveCamera(60, sw/sh, 0.1, 1000)
-camera:set_position(0, 12, 10)
-camera:look_at(menori.ml.vec3(0, 0, 0))
-
--- Environment (handles uniforms sent to shaders per frame)
-local env = menori.Environment(camera)
-
--- Scene (renders node tree)
-local scene = menori.Scene()
-
--- Root node
-local root = menori.Node()
-
--- Board tile: a Plane mesh at world position
-local tile = menori.ModelNode(menori.Plane(1, 1))
-tile:set_position(x, 0, z)
-root:attach(tile)
-
--- Render loop
-function love.draw()
-    love.graphics.setCanvas({canvas, depth = true})
-    scene:render_nodes(root, env)
-    love.graphics.setCanvas()
-    -- blit canvas to screen …
-end
-```
-
-### Phase 2 board → 3D mapping
-
-| Game concept | 3D representation |
-|---|---|
-| Board cell (col, row) | `Plane(1,1)` at `vec3((col-3)*1.1, 0, (row-4)*1.1)` |
-| Piece | `Box(0.7, 1.0, 0.7)` placeholder → swap for `.glb` model later |
-| Selection highlight | Emissive colour uniform on the tile's material |
-| 3 boards | Offset each board along the X axis: `board_idx * 8` units |
-| Camera per player | 3 `PerspectiveCamera` instances; swap on focus change |
-| Mouse picking | Ray–AABB intersection against piece bounding boxes (`menori.ml`) |
-
-### GLTF piece loading (when models are ready)
-```lua
--- Assets go in assets/models/<piece_type>.glb
-local loader = menori.glTFLoader.load("assets/models/king.glb")
-local node_tree = menori.NodeTreeBuilder.create(loader, scene, env)
-root:attach(node_tree)
-```
-
-### Render target (Phase 2 main.lua pattern)
-```lua
-local canvas = love.graphics.newCanvas(sw, sh, {format="rgba8", depth=true})
-
-function love.draw()
-    love.graphics.setCanvas({canvas, depth=true})
-    love.graphics.clear(0.08, 0.08, 0.10)
-    scene_3d:draw()                  -- Menori scene
-    love.graphics.setCanvas()
-    love.graphics.draw(canvas, 0, 0) -- blit
-    hud:draw(engine.state)           -- 2D HUD overlay
-end
-```
-
-> **Rule:** `src/ui/scene_3d.lua` reads `GameState` and builds/updates the Menori node tree.
-> It must **never** call `GameEngine` methods — UI is read-only.
-
----
-
-## Game rules (authoritative reference)
-
-### Boards
-- **3 boards**, each **5 columns (a–e) × 7 rows (1–7)**
-- Boards are connected in a triangle; an Invoker can invoke on any of the 3 boards
-- Row zones (same for every board):
-
-| Row | Zone |
-|---|---|
-| 1 | Team A base — invocation zone |
-| 2–3 | Team A zone — invocation zone |
-| 4 | **Neutral line** — Invoker must stand here to invoke |
-| 5–6 | Team B zone — invocation zone |
-| 7 | Team B base — invocation zone |
-
-### Teams & players
-- **Team A** vs **Team B**, 3 players each
-- Player N of each team opposes each other on Board N
-- Initial layout (Team A, row 1): `Invoker @ a1 · Slot1 @ b1 · King @ c1 · Slot2 @ d1 · Slot3 @ e1`
-- Team B mirrors on row 7 (columns reversed)
-
-### Piece classes
-
-| Piece | Move | Capture | Special | Invocable |
-|---|---|---|---|---|
-| **King** | 1 cell, 8 dirs | By stepping | Objective | ❌ |
-| **Invoker** | 2 cells diagonal | ❌ never | Must be on row 4 to invoke | ❌ |
-| **Knight** | L-shape (2+1), jumps | By stepping | — | ✅ |
-| **Assassin** | 3 cells straight or diagonal (no jump) | Diagonal adjacent only (1 cell) | After capture: optional retreat to origin (same turn) | ✅ |
-| **Archer** | 1 cell orthogonal | Move OR shoot (not both) | Shoot: exactly 2 cells orthogonal, stays in place. Ignores Guardian protection | ✅ |
-| **Mage** | 1 cell diagonal | Move OR shoot (not both) | Shoot: exactly 3 cells any direction, stays in place. Fragile: capturable by any enemy ≤2 cells | ✅ |
-| **Guardian** | 2 cells orthogonal, no jump | By stepping | Passive: adjacent allies (8 cells) cannot be captured. Archer ignores this | ✅ |
-| **Paladin** | 1 cell, 8 dirs | By stepping | Passive protection (Archer does NOT ignore). 1×/game: invoke adjacent piece (full action) | ✅ |
-| **Enchanter** | 1 cell, 8 dirs | ❌ never | 1×/game: place Invocation Totem (3×3 zone, 3 captures or enemy steps on it → destroyed) | ✅ |
-
-### Draft (per player, before match)
-- Slot 1: **Knight** OR **Assassin**
-- Slot 2: **Archer** OR **Mage**
-- Slot 3: **Guardian** OR **Paladin** OR **Enchanter**
-- Default (prototype): Knight + Archer + Guardian
-
-### Reserve system
-- Captured pieces go to the **capturing team's** reserve (not the victim's)
-- Kings and Invokers are **never** in the reserve (removed from game)
-- Any Invoker on the team can invoke from the shared reserve
-
-### Turn structure (Proposition B — implemented)
-- 20-second shared timer per team
-- 3 players act in any order; each does **exactly 1 action**
-- Turn ends when all 3 players have acted OR timer expires
-- Actions: `move`, `shoot`, `invoke`, `paladin_inv`, `place_totem`, `suicide`, `pass`
-
-### Win condition (Proposition A — implemented)
-- **Capture 2 out of 3 enemy Kings** while keeping at least 1 allied King
-
-### Momentum system
-| Event | Δ |
-|---|---|
-| Capture enemy piece | +10 |
-| Successful invoke | +5 |
-| Put enemy King in threat (first turn) | +15 |
-| Lose a piece | −10 |
-| Lose a King | −20 |
-
-At 100 momentum (1×/game), team chooses an **Ultimate**:
-- `mass_invoke` — invoke 3 pieces this turn
-- `divine_shield` — immune to all captures next enemy turn
-- `teleport` — swap any 2 allied pieces across boards
-- `resurrection` — place any captured allied piece directly on board
-
----
-
-## What is already implemented
-
-- [x] Full project structure
-- [x] All constants, utils, piece class
-- [x] Board class with totem support
-- [x] GameState (3 boards, reserves, momentum, turn management, win check)
-- [x] GameEngine (execute_move, execute_shoot, execute_invoke, execute_paladin_invoke, execute_place_totem, execute_suicide, execute_pass, execute_ultimate)
-- [x] Movement rules for all 8 piece types
-- [x] Full validation (protection, fragility, Assassin diagonal-only capture, etc.)
-- [x] 2D renderer: 3 boards side-by-side, coloured zones, piece labels, totem overlay
-- [x] HUD: turn banner, timer, momentum bars, reserve list, kings alive, win screen
-- [x] Mouse input: click-to-select → click-to-act, cross-board Invoker invocation
-- [x] Keyboard: Space/Enter = end turn, Escape = deselect, R = reset
-
----
-
-## What still needs to be built (roadmap)
-
-### Immediate / Phase 1
-
-- [ ] **Draft screen** — before game starts, let each player pick Slot 1/2/3 pieces
-- [ ] **Reserve picker UI** — when invoking, show a list of pieces in reserve to choose from (currently auto-picks first)
-- [ ] **Assassin retreat UI** — after a capture, offer the player the option to retreat
-- [ ] **Check/threat highlighting** — highlight King cells that are threatened
-- [ ] **Suicide action UI** — player should be able to select "Suicide" for a piece via UI
-- [ ] **Totem invocation** — Enchanter totem should also expand the invocation zone it covers
-- [ ] **AI opponent (basic)** — greedy or random bot so solo play is possible
-- [ ] **Sound effects** — capture sound, invoke fanfare, turn start ding
-
-### Phase 2 (3D + online)
-
-- [ ] **Menori integration** — replace 2D board renderer with 3D scene graph
-- [ ] **3D piece models** — load GLTF models via Menori
-- [ ] **Network layer** — 6-player real-time sync (authoritative server)
-- [ ] **Matchmaking** — lobby, ranked queue
-- [ ] **Elo system** — 60% team result + 40% individual performance
-
----
-
-## Unresolved design questions (to discuss with Dorian)
-
-| # | Question | Options |
+| Phase | Duration | Deliverable |
 |---|---|---|
-| 1 | Board orientation | Each player sees own board from "their side"? Or single fixed global view? |
-| 2 | Assassin: straight movement | Can it move straight without capturing, up to 3 cells? (Currently yes) |
-| 3 | Mage fragility exact rule | Capturable by any enemy ≤2 cells — does this bypass Guardian protection? |
-| 4 | Invocation cross-board | Currently all 3 boards are mutually reachable. Should it be strictly adjacent only? |
-| 5 | Farming / phase after King captured | Implement Proposition B (Sabotage mode) or Proposition C (redistribution)? |
-| 6 | Turn system | Proposition B (sequential 20s) is implemented. Confirm or switch to A (simultaneous reveal)? |
+| **Phase 1** | 3–4 mo | **1v1 prototype**, validate core mechanics on a single board |
+| Phase 2 | 6–8 mo | 3v3 MVP, networking, alpha (~100 testers) |
+| Phase 3 | 4–6 mo | Full Elo, Battle Pass, beta (~10K+ players) |
+| Phase 4 | 2–3 mo | Release, tournaments, mobile |
+
+**Total: 15–21 months.** Iterative, validate-before-scale.
+
+**Right now, work targets Phase 1 only.** Anything labeled Phase 2+ is premature unless explicitly requested.
 
 ---
 
-## Key conventions
+## 3. Tech stack
 
-- **All coordinates**: `col` = 1–5 (a–e), `row` = 1–7 (bottom to top for Team A)
-- **Team IDs**: `C.TEAM_A = 1`, `C.TEAM_B = 2`
-- **Player IDs**: 1, 2, 3 per team (matches board index they start on)
-- **Piece IDs**: auto-incrementing integers, reset on `Piece.reset_ids()`
-- **Require paths**: always from project root, e.g. `require("src.logic.movement")`
-- **No global state**: everything flows through `GameState` and `GameEngine`
-- **Validation first**: always call `validation.lua` before mutating state in engine
+Primary stack — TypeScript end-to-end. No Rust/native modules in Phase 1.
+
+| Layer | Choice | Why |
+|---|---|---|
+| Frontend | **Next.js + React + Three.js** | SSR for marketing pages, Three.js for 3D board rendering |
+| Backend | **Node.js + Hono** | Lightweight, edge-friendly, matches personal stack |
+| Realtime | **WebSockets** (native or `ws`) | Phase 2+; Phase 1 is local-only |
+| Persistence | **PostgreSQL** | Game history, Elo, accounts |
+| Cache / pubsub | **Redis** | Matchmaking queue, live game state broadcast (Phase 2+) |
+| Validation | **Zod** | Runtime schema validation at all API and WebSocket boundaries |
+| Testing | **Vitest** + **fast-check** (property-based) | Rule engine is the crown jewel — test it like it |
+
+**Language.** TypeScript, `strict: true`, `noUncheckedIndexedAccess: true`. No `any` escapes without a `// eslint-disable` comment that explains why.
+
+**Node version.** 20 LTS or later.
 
 ---
 
-## Coding guidelines
+## 4. Architecture principles
 
-- Keep `game_state.lua` as a **pure data container** — no game logic
-- All action logic lives in `game_engine.lua`
-- All movement geometry lives in `logic/movement.lua`
-- All legality checks live in `logic/validation.lua`
-- UI files (`src/ui/`) must **never mutate** game state — read only
-- New piece types: add to `constants.lua` first, then `movement.lua`, `validation.lua`, `board_view.lua` labels
-- New actions: add to `C.ACTION`, implement `V.xxx` in `validation.lua`, `execute_xxx` in `game_engine.lua`
+### 4.1 Domain-first, always
+
+Dorian works backwards from the end goal and models the domain before the infrastructure. So do you.
+
+Before writing any handler, route, or UI component, we model:
+1. **Entities** (Game, Board, Player, Team, Piece, Move, Reserve, MomentumGauge).
+2. **Invariants** (rules that must always hold — e.g. "a team has at most 3 living Kings across boards").
+3. **State transitions** (pure functions: `(state, action) -> state | Error`).
+4. **Commands and events** (what players send; what the system broadcasts).
+
+Only then do we write the thing that executes those transitions.
+
+### 4.2 Pure core, imperative shell
+
+- **Core** (`/packages/rules`): pure TypeScript. No I/O, no Date.now(), no randomness without an injected seed. Given the same `(state, action)`, it returns the same `(newState | error)`.
+- **Shell** (`/apps/server`, `/apps/web`): handles WebSockets, DB, rendering, time, RNG. Calls into the core.
+
+This split is non-negotiable. The core must be runnable in a browser, a Node server, a Web Worker, and a test harness without modification.
+
+### 4.3 Event-sourced game state
+
+A game is a sequence of validated **Actions** (Move, Capture, Shoot, Summon, UltimateActivation, …). Current state is a fold over history.
+
+Benefits: instant replay, clean undo (Phase 1 design aid), networking via event stream, spectator mode for free, reproducible bug reports.
+
+### 4.4 Command pattern for actions
+
+Every action is a first-class object that knows how to `validate(state) -> Result` and `apply(state) -> state`. Matches Option C from the architecture discussion and makes rule evolution painless.
+
+```ts
+interface Action {
+  readonly kind: ActionKind;
+  readonly playerId: PlayerId;
+  readonly timestamp: number;  // server-assigned in multiplayer
+  validate(state: GameState): Result<void, RuleViolation>;
+  apply(state: GameState): GameState;  // only called after validate passes
+}
+```
+
+### 4.5 Make illegal states unrepresentable
+
+Prefer discriminated unions over optional fields. Prefer branded types (`type PieceId = string & { __brand: 'PieceId' }`) over raw strings. Prefer `Result<T, E>` over thrown exceptions in the core.
+
+---
+
+## 5. Domain model sketch
+
+Not prescriptive — sketch to anchor discussion. Refine before coding.
+
+```
+Game
+├── matchId, seed, createdAt
+├── teams: [Team, Team]                      // A, B
+├── boards: [Board, Board, Board]            // P1, P2, P3
+├── turn: TurnState                          // whose team, timer, actions played
+├── momentum: { A: 0..100, B: 0..100 }
+├── ultimatesUsed: { A: boolean, B: boolean }
+├── reserves: { A: Piece[], B: Piece[] }     // captured pieces available to summon
+├── history: Action[]                        // event-sourced
+└── stagnationCounter: number                // turns since last capture
+
+Team
+├── teamId: 'A' | 'B'
+└── players: [Player, Player, Player]
+
+Player
+├── playerId
+├── teamId
+├── boardId: 'P1' | 'P2' | 'P3'              // which board they sit at
+├── side: 'south' | 'north'                  // rows 1-3 or 5-7
+├── squad: [Slot1Class, Slot2Class, Slot3Class]   // draft result
+└── kingAlive: boolean                        // player keeps playing after king capture
+
+Board
+├── boardId
+├── grid: 5 cols × 7 rows                     // Cell[][]
+├── adjacents: [Board, Board]                 // triangular connection (P1<->P2, P2<->P3, P3<->P1)
+└── totems: Totem[]                           // Enchanteur totems, if any
+
+Piece
+├── pieceId (branded)
+├── kind: Roi | Invocateur | Cavalier | Assassin | Archer | Mage | Gardien | Paladin | Enchanteur
+├── ownerPlayerId
+├── position: { boardId, col: 'a'..'e', row: 1..7 } | 'reserve'
+└── flags: { paladinSummonUsed, enchanteurTotemUsed, ... }
+```
+
+Pieces ship as a discriminated union keyed on `kind`. Each class has its own module exporting `moves(state, piece) -> Position[]`, `canCapture(state, from, to) -> boolean`, and any special action handler.
+
+---
+
+## 6. Real-time & networking (Phase 2+ — skip in Phase 1)
+
+Noted here so you don't accidentally architect Phase 1 in a way that blocks Phase 2.
+
+**Target latency.** 50–200 ms for 6 simultaneous players.
+
+**Planned approach.**
+- **Server-authoritative.** Clients send intents (`Action` candidates), server validates, broadcasts confirmed actions.
+- **Client prediction** for the acting player's own moves (optimistic local apply, reconcile on server response).
+- **Rollback netcode** is the ideal; lock-step with a short buffer is the fallback.
+- **Conflict resolution** for the reserve (two players summoning the same piece): first server-timestamped action wins.
+
+**Phase 1 consequence.** Design the `Action` interface and state reducer as if they already run in a multiplayer context (pure, serializable, idempotent when reapplied with the same timestamp). Do not assume single-process state mutation.
+
+---
+
+## 7. Game design — non-negotiables
+
+These are **locked** design decisions. Do not suggest overturning them without strong justification.
+
+- **5 pieces per player.** 2 mandatory (Roi, Invocateur) + 3 drafted.
+- **8 total classes** (the original set). No new classes without explicit discussion.
+- **Roi and Invocateur are never summonable.** Their loss is permanent.
+- **Player whose Roi is captured keeps playing.** No early elimination.
+- **Victory = capture 2 enemy Kings while retaining ≥1 ally King.** Team-only; no individual victory condition.
+- **No post-victory farming phase.** Match ends immediately on the winning capture.
+- **Momentum gauge (0–100)** replaces the old "optimal move" concept. It is transparent and measurable.
+- **Ultimate is 1×/game** regardless of how many times the gauge fills.
+- **Gardien vs Paladin distinction is critical.** Archer ignores Gardien's aura but *not* Paladin's. Don't conflate them.
+- **Enchanteur Totem is single-use per game**, permanent until destroyed (3 summons or enemy steps on it).
+
+---
+
+## 8. Open design questions (still live)
+
+If work touches these areas, flag it and propose before implementing. Do not silently commit to one option.
+
+1. **Turn structure.** Current rules v2 lock in *sequential-per-team* with a shared 20s timer. The *simultaneous-with-reveal-phase* option (15s plan → reveal → 5s execute) is archived but not dead. If we validate 1v1 with sequential and it feels flat in 3v3 playtests, simultaneous is the fallback.
+2. **Draft vs predefined comps.** Leaning draft (12 comps/player). Tournament Ban/Pick layer is optional.
+3. **Visual orientation of the triangular board connection.** UX-level decision, unresolved. Affects how pieces visually "cross" between boards (if ever — currently they don't, but Ultimate Teleportation does).
+4. **Ideal match duration sweet spot.** Target 10–15 min. Anti-stagnation thresholds (8/12/16 turns) are a first guess; may need rebalancing after playtesting.
+5. **Archer move + shoot in one turn?** Resolved in v2: **NO, it's one or the other.** Keep locked unless playtesting shows it's too weak.
+
+---
+
+## 9. Coding conventions
+
+### TypeScript
+
+- `strict: true`, `noUncheckedIndexedAccess: true`, `exactOptionalPropertyTypes: true`.
+- Branded types for all IDs: `PieceId`, `PlayerId`, `MatchId`, `BoardId`.
+- Discriminated unions (`type Piece = Roi | Invocateur | ...`) over class hierarchies.
+- `readonly` by default on all domain state fields.
+- No `null` in the core. Use `undefined` or better, `Option<T>` / `Result<T, E>` via a tiny local helper.
+- No exceptions thrown from the core. The core returns `Result`. The shell may throw for truly exceptional infra errors (DB down).
+
+### File layout
+
+```
+/packages/rules          # pure core — the rules engine
+  /src
+    /pieces              # one file per class: roi.ts, cavalier.ts, ...
+    /actions             # Action implementations: move.ts, shoot.ts, summon.ts, ultimate.ts
+    state.ts             # GameState type + initial state factory
+    reducer.ts           # (state, action) -> Result<state, error>
+    invariants.ts        # runtime assertions for tests
+    index.ts             # public API surface
+  /tests
+/packages/shared         # types reused by client & server
+  /src
+    types.ts             # branded IDs, enums, shared interfaces
+    index.ts
+/apps/server             # Hono + WebSocket gateway
+  /src
+    index.ts
+/apps/web                # Next.js + React + Three.js client
+  /src
+    /app
+    /components
+    /game                # Three.js scene, board renderer
+/apps/cli                # scriptable match runner for playtesting
+  /src
+    index.ts
+```
+
+### Naming
+
+- English in code and types. French is fine in comments and in user-facing strings.
+- **Exception:** piece class names stay in French in code (`Cavalier`, `Assassin`, `Mage`, `Gardien`, `Paladin`, `Enchanteur`, `Roi`, `Invocateur`). They are proper nouns of the game.
+
+### Commits
+
+Conventional commits (`feat:`, `fix:`, `refactor:`, `test:`, `docs:`). Keep them small; the event-sourced core means regressions are easy to bisect if commits are atomic.
+
+---
+
+## 10. Testing strategy
+
+The rules engine is the product's heart. Test it like it.
+
+1. **Unit tests** per piece class: valid moves, capture patterns, special abilities.
+2. **Property-based tests** (fast-check) for invariants that must *always* hold:
+   - No piece occupies two cells.
+   - A team never has more than 3 living Kings.
+   - Momentum is always in `[0, 100]`.
+   - A captured piece lands in exactly one reserve.
+   - Every action is either fully applied or not at all (no partial mutation on validation failure).
+3. **Replay tests.** Given `Action[]` and an initial seed, the fold must be deterministic. Same input → same final state, bit-for-bit.
+4. **Scenario tests** (integration): encode known tactical situations from the rules doc as fixture games.
+5. **Snapshot tests** for serialized game states so we catch accidental schema drift.
+
+No UI test infrastructure in Phase 1. Manual playtesting is enough until 1v1 prototype validates.
+
+---
+
+## 11. How to work with Dorian
+
+- **Reason through the problem independently and reach the most logical answer before inviting follow-up.** Don't ask 5 clarifying questions up front. Propose, explain trade-offs, then open the floor.
+- **Work in comprehensive passes** (rules → math → architecture) within a single session when the scope allows.
+- **Produce structured reference documents** suitable for handoff. Markdown with clear headers, tables where useful, no filler prose.
+- **Analogies help** when introducing unfamiliar concepts.
+- **Backwards planning.** Start from the end state and derive the steps.
+- **Simplicity over cleverness.** If there's a boring way that works, use it.
+
+**When Dorian says "think through X":** structured analysis with trade-offs, not a single recommendation.
+**When Dorian says "decide X":** pick one, state why, own it.
+
+---
+
+## 12. Critical risks to track
+
+1. **Real-time sync of 6 players** with 50–200 ms latency.
+2. **Simultaneous action conflict resolution** (if we revisit simultaneous turns).
+3. **Fair 3v3 Elo** — 40% individual + 60% team; anti-boosting enforcement.
+4. **Balance across 144 matchups** (12 comps × 12 enemy comps). Build telemetry early.
+
+---
+
+## 13. Key references
+
+- **`triad_chess_rules_v2.md`** — canonical ruleset. Source of truth for all mechanics. If something in code contradicts it, the code is wrong.
+- **Reference games:** Bughouse Chess, Hnefatafl, DotA 2, League of Legends, Rocket League.
+- **Legacy Lua prototype:** `legacy/` — original Love2D/Menori proof-of-concept. Archived, not active.
+
+---
+
+## 14. Quick checklist for new work
+
+Before you write code, confirm:
+
+- [ ] Did I read `triad_chess_rules_v2.md` for the mechanics involved?
+- [ ] Is this Phase 1 scope? If not, should it wait?
+- [ ] Does this touch a locked design decision (§7)? If so, stop and flag.
+- [ ] Does this touch an open question (§8)? If so, propose before implementing.
+- [ ] Am I writing in the pure core or in the shell? (§4.2)
+- [ ] Is the action serializable, deterministic, and testable in isolation?
+- [ ] Have I sketched the domain model before the code? (§4.1)
+- [ ] Is there a property-based test I can write alongside the feature? (§10)
+
+---
+
+*Last updated: April 2026. Revisit when Phase 1 prototype validates and Phase 2 scope becomes current.*

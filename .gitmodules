@@ -1,3 +1,6 @@
 [submodule "libs/menori"]
-	path = libs/menori
+	path = legacy/libs/menori
+	url = https://github.com/rozenmad/Menori.git
+[submodule "client/libs/menori"]
+	path = client/libs/menori
 	url = https://github.com/rozenmad/Menori.git
