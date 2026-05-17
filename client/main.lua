@@ -16,6 +16,39 @@ package.path = table.concat({
     package.path,
 }, ";")
 
+-- Menori internally uses love.filesystem.read() to load its shader .glsl
+-- files, assuming Menori sits at the LOVE filesystem root.  Since we placed
+-- it at libs/menori/, those reads would return nil.  Wrap love.filesystem.read
+-- so any failed lookup falls back to the submodule directory.
+do
+    local native_read = love.filesystem.read
+    local function fallback(path)
+        if type(path) ~= "string" then return nil end
+        local f = io.open(base .. "/libs/menori/" .. path, "rb")
+        if not f then return nil end
+        local content = f:read("*a")
+        f:close()
+        return content
+    end
+    function love.filesystem.read(a, b, c)
+        local data, size = native_read(a, b, c)
+        if data ~= nil then return data, size end
+        -- love.filesystem.read can be called as (path[, size]) or
+        -- (container, path[, size]). We only handle the string-container form.
+        local path
+        if a == "string" then
+            path = b
+        elseif a == "data" then
+            return data, size  -- leave FileData form to the native impl
+        else
+            path = a
+        end
+        local content = fallback(path)
+        if content then return content, #content end
+        return data, size
+    end
+end
+
 -- Load Menori (stored as git submodule at libs/menori)
 menori = require("menori")
 
