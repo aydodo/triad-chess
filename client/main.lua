@@ -5,11 +5,19 @@
 ]]
 
 -- Adjust package path so requires inside client/ work correctly.
+-- Menori's gltf.lua hard-codes `require 'libs.json'`, so we need the Menori
+-- submodule root on the package path for that to resolve.
 local base = love.filesystem.getSource()
-package.path = base .. "/?.lua;" .. base .. "/?/init.lua;" .. package.path
+package.path = table.concat({
+    base .. "/?.lua",
+    base .. "/?/init.lua",
+    base .. "/libs/menori/?.lua",
+    base .. "/libs/menori/?/init.lua",
+    package.path,
+}, ";")
 
 -- Load Menori (stored as git submodule at libs/menori)
-menori = require("libs.menori.menori")
+menori = require("menori")
 
 -- Game modules
 local State   = require("src.game.state")
