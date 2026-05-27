@@ -1,27 +1,32 @@
 --[[
-    camera.lua — Orbital camera for Triad Chess Phase 1.
+    camera.lua — Underlords-style fixed tactical camera.
+
+    Locked plunging view, frontal, slight perspective.  No orbital rotation
+    by default (the board never spins in Underlords).  Wheel still zooms.
+
+    Toggle free-orbit mode with [TAB] for debugging.
 
     Controls:
-      Right mouse drag  → orbit (yaw / pitch)
-      Scroll wheel      → zoom in/out
-      Middle mouse drag → pan (future extension, not wired in Phase 1)
-
-    Defaults: sitting at 45° elevation, looking down at the board centre.
-    Yaw and pitch are clamped so the board stays visible.
+      Scroll wheel       → zoom in/out  (clamped tight)
+      Right mouse drag   → orbit only when free_orbit is on
 ]]
 
 local Camera = {}
 Camera.__index = Camera
 
--- ─── Defaults ─────────────────────────────────────────────────────────────────
-local DEFAULT_YAW   =  0.0           -- radians, 0 = looking toward +Z
-local DEFAULT_PITCH = -math.pi / 3   -- ~-60°, looking downward
-local DEFAULT_DIST  = 14.0           -- world units from origin
+-- ─── Defaults — Underlords look ───────────────────────────────────────────────
+local DEFAULT_YAW   =  0.0                  -- frontal
+local DEFAULT_PITCH = -math.rad(48)         -- plunging ~48° down
+local DEFAULT_DIST  = 11.5                  -- frames a 5×7 board comfortably
+local DEFAULT_FOV   = 48                    -- tactical / cinematic feel
 
-local MIN_PITCH = -math.pi * 0.85    -- just past top-down
-local MAX_PITCH = -0.15              -- slight above-horizon
-local MIN_DIST  = 4.0
-local MAX_DIST  = 30.0
+-- Zoom clamps (tight on purpose — Underlords doesn't let you zoom much)
+local MIN_DIST  = 8.0
+local MAX_DIST  = 16.0
+
+-- Free-orbit clamps (only used when toggled on)
+local MIN_PITCH = -math.pi * 0.85
+local MAX_PITCH = -0.15
 
 -- ─── Constructor ─────────────────────────────────────────────────────────────
 function Camera.new(sw, sh)
@@ -31,27 +36,29 @@ function Camera.new(sw, sh)
     self.pitch = DEFAULT_PITCH
     self.dist  = DEFAULT_DIST
     self.center = menori.ml.vec3(0, 0, 0)
+    self.fov   = DEFAULT_FOV
+
+    -- Free-orbit toggle (off by default for Underlords feel)
+    self.free_orbit = false
 
     -- Right-drag state
     self._dragging = false
-    self._drag_sensitivity = 0.005  -- radians per pixel
+    self._drag_sensitivity = 0.005
 
-    -- Menori camera object
-    self.cam = menori.PerspectiveCamera(55, sw / sh, 0.1, 200)
+    self.cam = menori.PerspectiveCamera(self.fov, sw / sh, 0.1, 200)
     self:_update_position()
 
     return self
 end
 
--- ─── Internal: recompute eye from spherical coords ───────────────────────────
+-- ─── Spherical → Cartesian ────────────────────────────────────────────────────
 function Camera:_update_position()
-    local r   = self.dist
-    local py  = self.pitch
-    local ya  = self.yaw
-    -- Spherical → Cartesian (Y-up)
-    local x   = r * math.cos(py) * math.sin(ya)
-    local y   = r * math.sin(-py)   -- negative: pitch is negative when looking down
-    local z   = r * math.cos(py) * math.cos(ya)
+    local r  = self.dist
+    local py = self.pitch
+    local ya = self.yaw
+    local x  = r * math.cos(py) * math.sin(ya)
+    local y  = r * math.sin(-py)
+    local z  = r * math.cos(py) * math.cos(ya)
 
     self.cam.eye    = menori.ml.vec3(x, y, z)
     self.cam.center = self.center:clone()
@@ -61,10 +68,8 @@ end
 
 -- ─── Input callbacks ──────────────────────────────────────────────────────────
 function Camera:mouse_pressed(x, y, btn)
-    if btn == 2 then   -- right mouse button
-        self._dragging  = true
-        self._drag_x    = x
-        self._drag_y    = y
+    if btn == 2 and self.free_orbit then
+        self._dragging = true
     end
 end
 
@@ -75,25 +80,36 @@ function Camera:mouse_released(x, y, btn)
 end
 
 function Camera:mouse_moved(x, y, dx, dy)
-    if self._dragging then
+    if self._dragging and self.free_orbit then
         self.yaw   = self.yaw   + dx * self._drag_sensitivity
         self.pitch = self.pitch + dy * self._drag_sensitivity
-        -- Clamp pitch
         self.pitch = math.max(MIN_PITCH, math.min(MAX_PITCH, self.pitch))
         self:_update_position()
     end
 end
 
 function Camera:wheel_moved(wx, wy)
-    self.dist = self.dist - wy * 1.2
+    self.dist = self.dist - wy * 0.6
     self.dist = math.max(MIN_DIST, math.min(MAX_DIST, self.dist))
     self:_update_position()
+end
+
+-- ─── Toggle free orbit (debug aid) ───────────────────────────────────────────
+function Camera:toggle_free_orbit()
+    self.free_orbit = not self.free_orbit
+    if not self.free_orbit then
+        -- Snap back to default tactical view
+        self.yaw   = DEFAULT_YAW
+        self.pitch = DEFAULT_PITCH
+        self:_update_position()
+    end
+    return self.free_orbit
 end
 
 -- ─── Resize ───────────────────────────────────────────────────────────────────
 function Camera:resize(w, h)
     local ml = menori.ml
-    self.cam.m_projection = ml.mat4():perspective_RH_NO(55, w / h, 0.1, 200)
+    self.cam.m_projection = ml.mat4():perspective_RH_NO(self.fov, w / h, 0.1, 200)
     self:_update_position()
 end
 
@@ -102,8 +118,6 @@ function Camera:get()
     return self.cam
 end
 
--- ─── Ray for mouse picking ────────────────────────────────────────────────────
--- Returns {origin, direction} ray in world space for screen coords (mx, my).
 function Camera:ray_at(mx, my, sw, sh)
     return self.cam:screen_point_to_ray(mx, my, {0, 0, sw, sh})
 end

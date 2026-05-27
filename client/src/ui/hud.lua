@@ -287,10 +287,9 @@ function HUD:_draw_hints(sw, sh)
 
     local hints = {
         "[Clic G] Sélectionner / Déplacer / Tirer",
-        "[I] Mode Invocation (si Invocateur sélectionné)",
-        "[P] Passer le tour",
-        "[Clic D drag] Pivoter caméra   [Molette] Zoom",
-        "[R] Réinitialiser   [Esc] Quitter",
+        "[I] Mode Invocation     [P] Passer",
+        "[Molette] Zoom          [Tab] Vue libre (debug)",
+        "[R] Réinitialiser       [Esc] Quitter",
     }
     local x = 8
     local y = sh - (#hints * 16) - 6

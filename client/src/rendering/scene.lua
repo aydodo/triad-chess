@@ -51,6 +51,9 @@ function Scene.new(sw, sh)
     -- Canvases for 3D rendering (color + depth)
     self:_init_canvases(sw, sh)
 
+    -- Tabletop base (wooden slab under the board)
+    self:_build_base()
+
     -- Static tile nodes: tile_nodes[col][row] = ModelNode
     self.tile_nodes = {}
     self:_build_board()
@@ -60,6 +63,28 @@ function Scene.new(sw, sh)
     self.piece_nodes = {}  -- list of {node, piece} pairs attached to root
 
     return self
+end
+
+function Scene:_build_base()
+    -- Outer table slab (large wooden surface around the board)
+    local table_w = Board.COLS * CELL + 8
+    local table_d = Board.ROWS * CELL + 8
+    local table_mesh = menori.Box(table_w, 0.4, table_d)
+    local table_mat  = menori.Material()
+    table_mat:set('baseColor', {0.18, 0.12, 0.09, 1})  -- dark walnut
+    local table_node = menori.ModelNode(table_mesh, table_mat)
+    table_node:set_position(0, -0.32, 0)
+    self.root:attach(table_node)
+
+    -- Board base (raised slab directly under the tiles)
+    local base_w = Board.COLS * CELL + 1.2
+    local base_d = Board.ROWS * CELL + 1.2
+    local base_mesh = menori.Box(base_w, 0.25, base_d)
+    local base_mat  = menori.Material()
+    base_mat:set('baseColor', {0.28, 0.20, 0.16, 1})  -- warmer wood frame
+    local base_node = menori.ModelNode(base_mesh, base_mat)
+    base_node:set_position(0, -0.14, 0)
+    self.root:attach(base_node)
 end
 
 function Scene:_init_canvases(sw, sh)
@@ -160,7 +185,7 @@ function Scene:draw(state, input, sw, sh)
         lovg.setCanvas(self.color_canvas)
     end
 
-    lovg.clear(0.08, 0.10, 0.14, 1)  -- dark background
+    lovg.clear(0.05, 0.05, 0.07, 1)  -- near-black tabletop ambience
 
     if self.depth_canvas then
         lovg.setDepthMode('less', true)

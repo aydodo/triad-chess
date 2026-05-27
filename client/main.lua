@@ -122,6 +122,10 @@ function love.keypressed(key)
     elseif key == "escape" and (not input or input.mode == "idle") then
         love.event.quit()
         return
+    elseif key == "tab" then
+        -- Toggle free-orbit camera (debug)
+        scene.camera:toggle_free_orbit()
+        return
     end
     -- Forward to input FSM
     if input then input:love_keypressed(key) end
